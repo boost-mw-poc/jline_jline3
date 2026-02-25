@@ -1342,6 +1342,64 @@ public interface Terminal extends Closeable, Flushable {
     boolean trackFocus(boolean tracking);
 
     /**
+     * Returns whether the terminal supports mode 2027 (grapheme cluster / Unicode Core).
+     *
+     * <p>
+     * Mode 2027 allows the terminal to use UAX #29 grapheme cluster segmentation
+     * instead of per-codepoint {@code wcwidth()} for cursor positioning. This matters
+     * for multi-codepoint characters like ZWJ emoji sequences (e.g., family emoji),
+     * which would otherwise be counted as multiple separate characters.
+     * </p>
+     *
+     * <p>
+     * Support detection uses DECRQM probing, which is only performed on terminals
+     * whose type starts with {@code "xterm"} (or similar modern terminals). The probe
+     * is never sent to dumb terminals or terminals that are unlikely to understand
+     * DECRQM, avoiding the risk of printing garbage on unsupported terminals.
+     * </p>
+     *
+     * @return {@code true} if the terminal supports mode 2027, {@code false} otherwise
+     * @see #setGraphemeClusterMode(boolean)
+     * @see #getGraphemeClusterMode()
+     */
+    default boolean supportsGraphemeClusterMode() {
+        return false;
+    }
+
+    /**
+     * Returns whether mode 2027 (grapheme cluster) is currently enabled.
+     *
+     * @return {@code true} if grapheme cluster mode is currently enabled, {@code false} otherwise
+     * @see #setGraphemeClusterMode(boolean)
+     */
+    default boolean getGraphemeClusterMode() {
+        return false;
+    }
+
+    /**
+     * Enables or disables mode 2027 (grapheme cluster / Unicode Core).
+     *
+     * <p>
+     * When enabled, the terminal uses UAX #29 grapheme cluster segmentation for
+     * cursor positioning. This allows multi-codepoint characters like ZWJ emoji
+     * sequences to be treated as single display units.
+     * </p>
+     *
+     * <p>
+     * The mode is tracked internally and will be automatically disabled when the
+     * terminal is closed, restoring the terminal to its previous state.
+     * </p>
+     *
+     * @param enable {@code true} to enable grapheme cluster mode, {@code false} to disable it
+     * @return {@code true} if the operation succeeded, {@code false} otherwise
+     * @see #supportsGraphemeClusterMode()
+     * @see #getGraphemeClusterMode()
+     */
+    default boolean setGraphemeClusterMode(boolean enable) {
+        return false;
+    }
+
+    /**
      * Returns the color palette for this terminal.
      *
      * <p>

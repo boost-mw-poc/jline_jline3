@@ -84,6 +84,8 @@ public abstract class AbstractTerminal implements TerminalExt {
     protected Runnable onClose;
     protected MouseTracking currentMouseTracking = MouseTracking.Off;
     protected volatile boolean closed = false;
+    private Boolean graphemeClusterModeSupported;
+    private boolean graphemeClusterModeEnabled;
 
     public AbstractTerminal(String name, String type) throws IOException {
         this(name, type, null, SignalHandler.SIG_DFL);
@@ -159,6 +161,9 @@ public abstract class AbstractTerminal implements TerminalExt {
     }
 
     protected void doClose() throws IOException {
+        if (graphemeClusterModeEnabled) {
+            setGraphemeClusterMode(false);
+        }
         if (status != null) {
             status.close();
         }
@@ -358,6 +363,108 @@ public abstract class AbstractTerminal implements TerminalExt {
         if (hasFocusSupport()) {
             writer().write(tracking ? "\033[?1004h" : "\033[?1004l");
             writer().flush();
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+    @Override
+    public boolean supportsGraphemeClusterMode() {
+        if (graphemeClusterModeSupported == null) {
+            graphemeClusterModeSupported = probeGraphemeClusterMode();
+        }
+        return graphemeClusterModeSupported;
+    }
+
+    @Override
+    public boolean getGraphemeClusterMode() {
+        return graphemeClusterModeEnabled;
+    }
+
+    /**
+     * Probes the terminal for mode 2027 support using DECRQM.
+     *
+     * <p>Sends {@code CSI ? 2027 $ p} and expects a DECRPM response
+     * {@code CSI ? 2027 ; Ps $ y} where Ps indicates the mode status.</p>
+     *
+     * <p>The probe is only performed on terminals whose type starts with
+     * {@code "xterm"}, as DECRQM is a DEC private mode query that may not be
+     * understood by older or minimal terminals. Terminals that do not understand
+     * DECRQM could echo the query as visible garbage or leave partial responses
+     * in the input buffer.</p>
+     *
+     * @return {@code true} if the terminal recognizes mode 2027
+     */
+    private boolean probeGraphemeClusterMode() {
+        if (TYPE_DUMB.equals(type) || TYPE_DUMB_COLOR.equals(type)) {
+            return false;
+        }
+        if (!type.startsWith("xterm")) {
+            return false;
+        }
+        // Enter raw mode to prevent the terminal response from being echoed
+        Attributes prev = enterRawMode();
+        try {
+            // Send DECRQM query for mode 2027
+            writer().write("\033[?2027$p");
+            writer().flush();
+
+            // Read DECRPM response: ESC [ ? 2 0 2 7 ; Ps $ y
+            long timeout = 100;
+            if (reader().peek(timeout) < 0) {
+                return false;
+            }
+            int[] expected = {'\033', '[', '?', '2', '0', '2', '7', ';'};
+            for (int e : expected) {
+                int c = reader().read(timeout);
+                if (c != e) {
+                    // Mismatch — drain any remaining bytes from the partial
+                    // response to avoid leaving garbage in the input buffer
+                    drainResponse(timeout);
+                    return false;
+                }
+            }
+            int ps = reader().read(timeout);
+            if (ps < '0' || ps > '4') {
+                drainResponse(timeout);
+                return false;
+            }
+            int dollar = reader().read(timeout);
+            int y = reader().read(timeout);
+            if (dollar != '$' || y != 'y') {
+                drainResponse(timeout);
+                return false;
+            }
+            // Ps: 1=set, 2=reset (can be set), 3=permanently set → supported
+            // Ps: 0=not recognized, 4=permanently reset → not supported
+            return ps == '1' || ps == '2' || ps == '3';
+        } catch (IOException e) {
+            return false;
+        } finally {
+            setAttributes(prev);
+        }
+    }
+
+    /**
+     * Drains any remaining bytes from a partial or unexpected DECRPM response.
+     * Reads and discards characters until no more are available within the timeout.
+     */
+    private void drainResponse(long timeout) {
+        try {
+            while (reader().peek(timeout) >= 0) {
+                reader().read(timeout);
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    @Override
+    public boolean setGraphemeClusterMode(boolean enable) {
+        if (supportsGraphemeClusterMode()) {
+            writer().write(enable ? "\033[?2027h" : "\033[?2027l");
+            writer().flush();
+            graphemeClusterModeEnabled = enable;
             return true;
         } else {
             return false;

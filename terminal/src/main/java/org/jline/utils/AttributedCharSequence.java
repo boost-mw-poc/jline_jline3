@@ -645,12 +645,27 @@ public abstract class AttributedCharSequence implements CharSequence {
      * @return the display width of this attributed string in columns
      */
     public int columnLength() {
+        return columnLength(null);
+    }
+
+    /**
+     * Returns the display width of this attributed string in columns.
+     *
+     * <p>When the terminal has grapheme cluster mode enabled, multi-codepoint
+     * sequences (ZWJ emoji, flags, etc.) are measured as single display units
+     * matching the terminal's cursor positioning.</p>
+     *
+     * @param terminal the terminal to query for grapheme cluster mode, or {@code null}
+     * @return the display width in columns
+     */
+    public int columnLength(Terminal terminal) {
         int cols = 0;
         int len = length();
         for (int cur = 0; cur < len; ) {
             int cp = codePointAt(cur);
-            if (!isHidden(cur)) cols += WCWidth.wcwidth(cp);
-            cur += Character.charCount(cp);
+            int w = isHidden(cur) ? 0 : WCWidth.wcwidth(cp);
+            cur += WCWidth.charCountForDisplay(this, cur, terminal);
+            cols += w;
         }
         return cols;
     }
@@ -676,6 +691,18 @@ public abstract class AttributedCharSequence implements CharSequence {
      * @return the subsequence spanning the specified column range
      */
     public AttributedString columnSubSequence(int start, int stop) {
+        return columnSubSequence(start, stop, null);
+    }
+
+    /**
+     * Returns a subsequence of this attributed string based on column positions.
+     *
+     * @param start    the starting column position (inclusive)
+     * @param stop     the ending column position (exclusive)
+     * @param terminal the terminal to query for grapheme cluster mode, or {@code null}
+     * @return the subsequence spanning the specified column range
+     */
+    public AttributedString columnSubSequence(int start, int stop, Terminal terminal) {
         int begin = 0;
         int col = 0;
         while (begin < this.length()) {
@@ -684,7 +711,7 @@ public abstract class AttributedCharSequence implements CharSequence {
             if (col + w > start) {
                 break;
             }
-            begin += Character.charCount(cp);
+            begin += WCWidth.charCountForDisplay(this, begin, terminal);
             col += w;
         }
         int end = begin;
@@ -695,7 +722,7 @@ public abstract class AttributedCharSequence implements CharSequence {
             if (col + w > stop) {
                 break;
             }
-            end += Character.charCount(cp);
+            end += WCWidth.charCountForDisplay(this, end, terminal);
             col += w;
         }
         return subSequence(begin, end);
@@ -740,6 +767,20 @@ public abstract class AttributedCharSequence implements CharSequence {
      * @return a list of attributed strings, each representing a line
      */
     public List<AttributedString> columnSplitLength(int columns, boolean includeNewlines, boolean delayLineWrap) {
+        return columnSplitLength(columns, includeNewlines, delayLineWrap, (Terminal) null);
+    }
+
+    /**
+     * Splits this attributed string into multiple lines based on column width.
+     *
+     * @param columns         the maximum width of each line in columns
+     * @param includeNewlines whether to include newline characters in the resulting lines
+     * @param delayLineWrap   whether to delay line wrapping until the last possible moment
+     * @param terminal        the terminal to query for grapheme cluster mode, or {@code null}
+     * @return a list of attributed strings, each representing a line
+     */
+    public List<AttributedString> columnSplitLength(
+            int columns, boolean includeNewlines, boolean delayLineWrap, Terminal terminal) {
         List<AttributedString> strings = new ArrayList<>();
         int cur = 0;
         int beg = cur;
@@ -756,7 +797,7 @@ public abstract class AttributedCharSequence implements CharSequence {
                 beg = cur;
                 col = w;
             }
-            cur += Character.charCount(cp);
+            cur += WCWidth.charCountForDisplay(this, cur, terminal);
         }
         strings.add(subSequence(beg, cur));
         return strings;

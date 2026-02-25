@@ -685,6 +685,7 @@ public class LineReaderImpl implements LineReader, Flushable {
                     terminal.puts(Capability.keypad_xmit);
                     if (isSet(Option.AUTO_FRESH_LINE)) callWidget(FRESH_LINE);
                     if (isSet(Option.MOUSE)) terminal.trackMouse(Terminal.MouseTracking.Normal);
+
                     if (isSet(Option.BRACKETED_PASTE)) {
                         terminal.writer().write(BRACKETED_PASTE_ON);
                     } else if (options.containsKey(Option.BRACKETED_PASTE)) {
@@ -1436,7 +1437,7 @@ public class LineReaderImpl implements LineReader, Flushable {
             return false;
         }
         while (count-- > 0 && buf.cursor() < lim) {
-            buf.move(1);
+            moveForwardOne();
         }
         return true;
     }
@@ -1450,7 +1451,7 @@ public class LineReaderImpl implements LineReader, Flushable {
             return false;
         }
         while (count-- > 0 && buf.cursor() > 0) {
-            buf.move(-1);
+            moveBackwardOne();
             if (buf.currChar() == '\n') {
                 buf.move(1);
                 break;
@@ -2431,11 +2432,30 @@ public class LineReaderImpl implements LineReader, Flushable {
             while (buf.cursor() >= lend) {
                 buf.move(-1);
             }
-            int c = buf.currChar();
-            buf.currChar(buf.prevChar());
-            buf.move(-1);
-            buf.currChar(c);
-            buf.move(neg ? 0 : 2);
+            if (terminal.getGraphemeClusterMode()) {
+                // Swap two grapheme clusters: the one before and the one at cursor
+                int curPos = buf.cursor();
+                int prevLen = graphemeClusterCodePointCountBefore(buf, curPos);
+                int prevStart = curPos - prevLen;
+                int curLen = graphemeClusterCodePointCount(buf, curPos);
+                // Extract both clusters
+                String prev = buf.substring(prevStart, curPos);
+                String curr = buf.substring(curPos, curPos + curLen);
+                // Delete both and reinsert swapped
+                buf.cursor(prevStart);
+                buf.delete(prevLen + curLen);
+                buf.write(curr);
+                buf.write(prev);
+                if (neg) {
+                    buf.cursor(prevStart);
+                }
+            } else {
+                int c = buf.currChar();
+                buf.currChar(buf.prevChar());
+                buf.move(-1);
+                buf.currChar(c);
+                buf.move(neg ? 0 : 2);
+            }
         }
         return true;
     }
@@ -2470,11 +2490,153 @@ public class LineReaderImpl implements LineReader, Flushable {
     }
 
     protected boolean backwardChar() {
+        if (terminal.getGraphemeClusterMode()) {
+            int moved = 0;
+            for (int i = 0; i < count && buf.cursor() > 0; i++) {
+                moveBackwardOne();
+                moved++;
+            }
+            return moved != 0;
+        }
         return buf.move(-count) != 0;
     }
 
     protected boolean forwardChar() {
+        if (terminal.getGraphemeClusterMode()) {
+            int moved = 0;
+            for (int i = 0; i < count && buf.cursor() < buf.length(); i++) {
+                moveForwardOne();
+                moved++;
+            }
+            return moved != 0;
+        }
         return buf.move(count) != 0;
+    }
+
+    /**
+     * Returns the number of code points in the grapheme cluster starting at
+     * position {@code pos} in the buffer.
+     */
+    private static int graphemeClusterCodePointCount(Buffer buf, int pos) {
+        int len = buf.length();
+        if (pos >= len) return 0;
+        int cp = buf.atChar(pos);
+        int cur = pos + 1;
+        // Regional indicator pairs (flags)
+        if (WCWidth.isRegionalIndicator(cp) && cur < len && WCWidth.isRegionalIndicator(buf.atChar(cur))) {
+            return 2;
+        }
+        // Consume grapheme cluster extensions
+        while (cur < len) {
+            int ncp = buf.atChar(cur);
+            if (ncp == 0x200D && cur + 1 < len) {
+                // ZWJ + next code point
+                cur += 2;
+            } else if (WCWidth.wcwidth(ncp) == 0 && ncp >= 0x20) {
+                cur++;
+            } else {
+                break;
+            }
+        }
+        return cur - pos;
+    }
+
+    /**
+     * Returns the number of code points in the grapheme cluster ending just
+     * before position {@code pos} in the buffer (for backward movement).
+     */
+    private static int graphemeClusterCodePointCountBefore(Buffer buf, int pos) {
+        if (pos <= 0) return 0;
+        // Walk backwards: a grapheme cluster in the buffer is structured as
+        //   BASE [extending | ZWJ BASE]*
+        // We scan left from pos-1, consuming extending chars and ZWJ+BASE pairs.
+        int cur = pos - 1;
+        // Skip trailing extending characters (variation selectors, skin tones, combining marks)
+        while (cur > 0
+                && WCWidth.wcwidth(buf.atChar(cur)) == 0
+                && buf.atChar(cur) >= 0x20
+                && buf.atChar(cur) != 0x200D) {
+            cur--;
+        }
+        // Now cur points at a base character or a ZWJ.
+        // Scan backwards through ZWJ+BASE pairs
+        while (cur >= 2) {
+            int prev = buf.atChar(cur - 1);
+            if (prev == 0x200D) {
+                // ZWJ before the current base — skip over ZWJ and the preceding base
+                cur -= 2;
+                // Also skip extending chars before this base
+                while (cur > 0
+                        && WCWidth.wcwidth(buf.atChar(cur)) == 0
+                        && buf.atChar(cur) >= 0x20
+                        && buf.atChar(cur) != 0x200D) {
+                    cur--;
+                }
+            } else {
+                break;
+            }
+        }
+        // Check for regional indicator pair
+        if (cur > 0
+                && WCWidth.isRegionalIndicator(buf.atChar(cur))
+                && WCWidth.isRegionalIndicator(buf.atChar(cur - 1))) {
+            cur--;
+        }
+        return pos - cur;
+    }
+
+    /**
+     * Moves the cursor forward past one grapheme cluster (or one code point
+     * when grapheme cluster mode is off).
+     */
+    private void moveForwardOne() {
+        if (terminal.getGraphemeClusterMode()) {
+            buf.move(graphemeClusterCodePointCount(buf, buf.cursor()));
+        } else {
+            buf.move(1);
+        }
+    }
+
+    /**
+     * Moves the cursor backward past one grapheme cluster (or one code point
+     * when grapheme cluster mode is off).
+     */
+    private void moveBackwardOne() {
+        if (terminal.getGraphemeClusterMode()) {
+            buf.move(-graphemeClusterCodePointCountBefore(buf, buf.cursor()));
+        } else {
+            buf.move(-1);
+        }
+    }
+
+    /**
+     * Deletes one grapheme cluster (or one code point) at the cursor.
+     *
+     * @return true if a character was deleted
+     */
+    private boolean deleteGrapheme() {
+        if (buf.cursor() >= buf.length()) return false;
+        if (terminal.getGraphemeClusterMode()) {
+            buf.delete(graphemeClusterCodePointCount(buf, buf.cursor()));
+        } else {
+            buf.delete();
+        }
+        return true;
+    }
+
+    /**
+     * Deletes one grapheme cluster (or one code point) before the cursor.
+     *
+     * @return true if a character was deleted
+     */
+    private boolean backspaceGrapheme() {
+        if (buf.cursor() <= 0) return false;
+        if (terminal.getGraphemeClusterMode()) {
+            buf.backspace(graphemeClusterCodePointCountBefore(buf, buf.cursor()));
+        } else {
+            buf.backspace();
+        }
+        return true;
     }
 
     protected boolean viDigitOrBeginningOfLine() {
@@ -2677,6 +2839,7 @@ public class LineReaderImpl implements LineReader, Flushable {
             }
             terminal.puts(Capability.keypad_local);
             terminal.trackMouse(Terminal.MouseTracking.Off);
+
             if (isSet(Option.BRACKETED_PASTE) && !isTerminalDumb())
                 terminal.writer().write(BRACKETED_PASTE_OFF);
             // Stop the masking thread if it was started for dumb terminals
@@ -3442,7 +3605,9 @@ public class LineReaderImpl implements LineReader, Flushable {
         if (buf.cursor() == 0) {
             return false;
         }
-        buf.backspace(count);
+        for (int i = 0; i < count; i++) {
+            if (!backspaceGrapheme()) break;
+        }
         return true;
     }
 
@@ -3493,7 +3658,9 @@ public class LineReaderImpl implements LineReader, Flushable {
         if (buf.cursor() == buf.length()) {
             return false;
         }
-        buf.delete(count);
+        for (int i = 0; i < count; i++) {
+            if (!deleteGrapheme()) break;
+        }
         return true;
     }
 
@@ -3517,9 +3684,7 @@ public class LineReaderImpl implements LineReader, Flushable {
      */
     protected boolean viDeleteChar() {
         for (int i = 0; i < count; i++) {
-            if (!buf.delete()) {
-                return false;
-            }
+            if (!deleteGrapheme()) return false;
         }
         return true;
     }
@@ -3536,7 +3701,7 @@ public class LineReaderImpl implements LineReader, Flushable {
                 int ch = buf.atChar(buf.cursor());
                 ch = switchCase(ch);
                 buf.currChar(ch);
-                buf.move(1);
+                moveForwardOne();
             } else {
                 return false;
             }
@@ -3557,7 +3722,14 @@ public class LineReaderImpl implements LineReader, Flushable {
         }
 
         for (int i = 0; i < count; i++) {
-            if (buf.currChar((char) c)) {
+            if (terminal.getGraphemeClusterMode() && buf.cursor() < buf.length()) {
+                // Delete the entire grapheme cluster, then insert the replacement
+                deleteGrapheme();
+                buf.write(c);
+                if (i == count - 1) {
+                    buf.move(-1);
+                }
+            } else if (buf.currChar((char) c)) {
                 if (i < count - 1) {
                     buf.move(1);
                 }
@@ -4053,7 +4225,7 @@ public class LineReaderImpl implements LineReader, Flushable {
 
                 int w = WCWidth.wcwidth('…');
                 int width = size.getColumns();
-                int cursor = toCursor.columnLength();
+                int cursor = toCursor.columnLength(terminal);
                 int inc = width / 2 + 1;
                 while (cursor <= smallTerminalOffset + w) {
                     smallTerminalOffset -= inc;
@@ -4064,13 +4236,13 @@ public class LineReaderImpl implements LineReader, Flushable {
                 if (smallTerminalOffset > 0) {
                     sb.setLength(0);
                     sb.append("…");
-                    sb.append(full.columnSubSequence(smallTerminalOffset + w, Integer.MAX_VALUE));
+                    sb.append(full.columnSubSequence(smallTerminalOffset + w, Integer.MAX_VALUE, terminal));
                     full = sb.toAttributedString();
                 }
-                int length = full.columnLength();
+                int length = full.columnLength(terminal);
                 if (length >= smallTerminalOffset + width) {
                     sb.setLength(0);
-                    sb.append(full.columnSubSequence(0, width - w));
+                    sb.append(full.columnSubSequence(0, width - w, terminal));
                     sb.append("…");
                     full = sb.toAttributedString();
                 }
@@ -4087,7 +4259,7 @@ public class LineReaderImpl implements LineReader, Flushable {
                 newLines = new ArrayList<>();
                 newLines.add(full);
             } else {
-                newLines = full.columnSplitLength(size.getColumns(), true, display.delayLineWrap());
+                newLines = full.columnSplitLength(size.getColumns(), true, display.delayLineWrap(), terminal);
             }
 
             List<AttributedString> rightPromptLines;
@@ -4116,10 +4288,10 @@ public class LineReaderImpl implements LineReader, Flushable {
                 }
                 sb.append(insertSecondaryPrompts(new AttributedString(buffer), secondaryPrompts, false));
                 List<AttributedString> promptLines =
-                        sb.columnSplitLength(size.getColumns(), false, display.delayLineWrap());
+                        sb.columnSplitLength(size.getColumns(), false, display.delayLineWrap(), terminal);
                 if (!promptLines.isEmpty()) {
                     cursorNewLinesId = promptLines.size() - 1;
-                    cursorColPos = promptLines.get(promptLines.size() - 1).columnLength();
+                    cursorColPos = promptLines.get(promptLines.size() - 1).columnLength(terminal);
                     cursorPos = size.cursorPos(cursorNewLinesId, cursorColPos);
                 }
             }
@@ -4306,7 +4478,7 @@ public class LineReaderImpl implements LineReader, Flushable {
                             AttributedString astr;
                             if (!isHidden) {
                                 astr = fromAnsi(str);
-                                cols += astr.columnLength();
+                                cols += astr.columnLength(terminal);
                             } else {
                                 astr = new AttributedString(str, AttributedStyle.HIDDEN);
                             }
@@ -4424,7 +4596,7 @@ public class LineReaderImpl implements LineReader, Flushable {
         int width = 0;
         List<String> missings = new ArrayList<>();
         if (computePrompts && secondaryPromptPattern.contains("%P")) {
-            width = prompt.columnLength();
+            width = prompt.columnLength(terminal);
             if (width > size.getColumns() || prompt.contains('\n')) {
                 width = new TerminalLine(prompt.toString(), 0, size.getColumns())
                         .getEndLine()
@@ -4445,7 +4617,7 @@ public class LineReaderImpl implements LineReader, Flushable {
                 }
                 missings.add(missing);
                 prompt = expandPromptPattern(secondaryPromptPattern, 0, missing, line + 1);
-                width = Math.max(width, prompt.columnLength());
+                width = Math.max(width, prompt.columnLength(terminal));
             }
             buf.setLength(0);
         }
@@ -4496,10 +4668,10 @@ public class LineReaderImpl implements LineReader, Flushable {
     }
 
     private AttributedString addRightPrompt(AttributedString prompt, AttributedString line) {
-        int width = prompt.columnLength();
+        int width = prompt.columnLength(terminal);
         boolean endsWithNl = line.length() > 0 && line.charAt(line.length() - 1) == '\n';
         // columnLength counts -1 for the final newline; adjust for that
-        int nb = size.getColumns() - width - (line.columnLength() + (endsWithNl ? 1 : 0));
+        int nb = size.getColumns() - width - (line.columnLength(terminal) + (endsWithNl ? 1 : 0));
         if (nb >= 3) {
             AttributedStringBuilder sb = new AttributedStringBuilder(size.getColumns());
             sb.append(line, 0, endsWithNl ? line.length() - 1 : line.length());
@@ -5776,7 +5948,7 @@ public class LineReaderImpl implements LineReader, Flushable {
                         boolean hasRightItem = j < columns - 1 && index.applyAsInt(i, j + 1) < candidates.size();
                         AttributedString left = fromAnsi(cand.displ());
                         AttributedString right = fromAnsi(cand.descr());
-                        int lw = left.columnLength();
+                        int lw = left.columnLength(terminal);
                         int rw = 0;
                         if (right != null) {
                             int rem = maxWidth
@@ -5784,11 +5956,11 @@ public class LineReaderImpl implements LineReader, Flushable {
                                             + MARGIN_BETWEEN_DISPLAY_AND_DESC
                                             + DESC_PREFIX.length()
                                             + DESC_SUFFIX.length());
-                            rw = right.columnLength();
+                            rw = right.columnLength(terminal);
                             if (rw > rem) {
                                 right = AttributedStringBuilder.append(
-                                        right.columnSubSequence(0, rem - WCWidth.wcwidth('…')), "…");
-                                rw = right.columnLength();
+                                        right.columnSubSequence(0, rem - WCWidth.wcwidth('…'), terminal), "…");
+                                rw = right.columnLength(terminal);
                             }
                             right = AttributedStringBuilder.append(DESC_PREFIX, right, DESC_SUFFIX);
                             rw += DESC_PREFIX.length() + DESC_SUFFIX.length();
@@ -6214,11 +6386,11 @@ public class LineReaderImpl implements LineReader, Flushable {
             int currentLine = promptLines.size() - 1;
             int wantedLine = Math.max(0, Math.min(currentLine + event.getY() - cursor.getY(), secondaryPrompts.size()));
             int pl0 = currentLine == 0
-                    ? prompt.columnLength()
-                    : secondaryPrompts.get(currentLine - 1).columnLength();
+                    ? prompt.columnLength(terminal)
+                    : secondaryPrompts.get(currentLine - 1).columnLength(terminal);
             int pl1 = wantedLine == 0
-                    ? prompt.columnLength()
-                    : secondaryPrompts.get(wantedLine - 1).columnLength();
+                    ? prompt.columnLength(terminal)
+                    : secondaryPrompts.get(wantedLine - 1).columnLength(terminal);
             int adjust = pl1 - pl0;
             buf.moveXY(event.getX() - cursor.getX() - adjust, event.getY() - cursor.getY());
         }

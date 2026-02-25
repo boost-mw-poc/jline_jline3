@@ -8,6 +8,8 @@
  */
 package org.jline.utils;
 
+import org.jline.terminal.Terminal;
+
 /**
  * Utility class for determining the display width of Unicode characters.
  *
@@ -371,6 +373,94 @@ public final class WCWidth {
             this.first = first;
             this.last = last;
         }
+    }
+
+    /**
+     * Returns the number of {@code char}s consumed by the grapheme cluster
+     * starting at {@code index} in the given {@code CharSequence}.
+     *
+     * <p>A grapheme cluster is a user-perceived character that may be composed
+     * of multiple Unicode code points. This method recognizes:</p>
+     * <ul>
+     *   <li>ZWJ sequences (e.g., family emoji 👨‍👩‍👧‍👦)</li>
+     *   <li>Regional indicator pairs (flags, e.g., 🇫🇷)</li>
+     *   <li>Emoji modifier sequences (skin tones, e.g., 👋🏽)</li>
+     *   <li>Variation selector sequences (U+FE0E, U+FE0F)</li>
+     *   <li>Combining mark sequences</li>
+     * </ul>
+     *
+     * @param cs    the character sequence
+     * @param index the starting char index
+     * @return the number of chars consumed by the grapheme cluster
+     */
+    public static int charCountForGraphemeCluster(CharSequence cs, int index) {
+        int len = cs.length();
+        if (index >= len) return 0;
+
+        int cp = Character.codePointAt(cs, index);
+        int pos = index + Character.charCount(cp);
+
+        // Regional indicator pairs form a single grapheme cluster (flag)
+        if (isRegionalIndicator(cp) && pos < len) {
+            int next = Character.codePointAt(cs, pos);
+            if (isRegionalIndicator(next)) {
+                pos += Character.charCount(next);
+            }
+            return pos - index;
+        }
+
+        // Consume grapheme cluster extensions
+        while (pos < len) {
+            int ncp = Character.codePointAt(cs, pos);
+            if (ncp == 0x200D) { // ZWJ — joins with the next character
+                int zwjSize = Character.charCount(ncp);
+                if (pos + zwjSize < len) {
+                    pos += zwjSize;
+                    pos += Character.charCount(Character.codePointAt(cs, pos));
+                } else {
+                    break;
+                }
+            } else if (wcwidth(ncp) == 0 && ncp >= 0x20) {
+                // Zero-width extending characters: combining marks,
+                // variation selectors (FE0E/FE0F), skin tone modifiers,
+                // tag characters, etc.
+                pos += Character.charCount(ncp);
+            } else {
+                break;
+            }
+        }
+
+        return pos - index;
+    }
+
+    /**
+     * Returns the number of chars to advance past the current character or
+     * grapheme cluster at {@code index} in {@code cs}.
+     *
+     * <p>When the terminal has grapheme cluster mode enabled, this delegates to
+     * {@link #charCountForGraphemeCluster(CharSequence, int)} so that ZWJ
+     * emoji, flag pairs, skin-tone modifiers, etc. are treated as a single
+     * unit.  Otherwise it simply returns {@code Character.charCount(cp)}
+     * for the code point at {@code index}.</p>
+     *
+     * @param cs       the character sequence
+     * @param index    the starting char index
+     * @param terminal the terminal to query for grapheme cluster mode, or {@code null}
+     * @return the number of chars to advance
+     */
+    public static int charCountForDisplay(CharSequence cs, int index, Terminal terminal) {
+        if (terminal != null && terminal.getGraphemeClusterMode()) {
+            return charCountForGraphemeCluster(cs, index);
+        }
+        return Character.charCount(Character.codePointAt(cs, index));
+    }
+
+    /**
+     * Tests whether the given code point is a Regional Indicator Symbol
+     * (U+1F1E6 .. U+1F1FF), used in pairs to represent flag emoji.
+     */
+    public static boolean isRegionalIndicator(int cp) {
+        return cp >= 0x1F1E6 && cp <= 0x1F1FF;
     }
 
     /* auxiliary function for binary search in interval table */

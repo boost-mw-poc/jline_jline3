@@ -714,25 +714,33 @@ public class Less {
                     buffer.insert(curPos++, bindingReader.getLastBinding());
                     break;
                 case BACKSPACE:
-                    if (curPos > begPos - 1) {
-                        buffer.deleteCharAt(--curPos);
+                    if (curPos > begPos) {
+                        int cpLen = Character.charCount(Character.codePointBefore(buffer, curPos));
+                        buffer.delete(curPos - cpLen, curPos);
+                        curPos -= cpLen;
                     }
                     break;
                 case NEXT_WORD:
                     int newPos = buffer.length();
-                    for (int i = curPos; i < buffer.length(); i++) {
-                        if (buffer.charAt(i) == ' ') {
-                            newPos = i + 1;
+                    for (int i = curPos; i < buffer.length(); ) {
+                        int cp = buffer.codePointAt(i);
+                        int cc = Character.charCount(cp);
+                        if (cp == ' ') {
+                            newPos = i + cc;
                             break;
                         }
+                        i += cc;
                     }
                     curPos = newPos;
                     break;
                 case PREV_WORD:
                     newPos = begPos;
-                    for (int i = curPos - 2; i > begPos; i--) {
-                        if (buffer.charAt(i) == ' ') {
-                            newPos = i + 1;
+                    for (int i = curPos; i > begPos; ) {
+                        int cp = Character.codePointBefore(buffer, i);
+                        int cc = Character.charCount(cp);
+                        i -= cc;
+                        if (cp == ' ') {
+                            newPos = i + cc;
                             break;
                         }
                     }
@@ -746,26 +754,25 @@ public class Less {
                     break;
                 case DELETE:
                     if (curPos >= begPos && curPos < buffer.length()) {
-                        buffer.deleteCharAt(curPos);
+                        int cpLen = Character.charCount(buffer.codePointAt(curPos));
+                        buffer.delete(curPos, curPos + cpLen);
                     }
                     break;
                 case DELETE_WORD:
-                    while (true) {
-                        if (curPos < buffer.length() && buffer.charAt(curPos) != ' ') {
-                            buffer.deleteCharAt(curPos);
+                    while (curPos < buffer.length()) {
+                        int cp = buffer.codePointAt(curPos);
+                        if (cp != ' ') {
+                            buffer.delete(curPos, curPos + Character.charCount(cp));
                         } else {
                             break;
                         }
                     }
-                    while (true) {
-                        if (curPos - 1 >= begPos) {
-                            if (buffer.charAt(curPos - 1) != ' ') {
-                                buffer.deleteCharAt(--curPos);
-                            } else {
-                                buffer.deleteCharAt(--curPos);
-                                break;
-                            }
-                        } else {
+                    while (curPos > begPos) {
+                        int cp = Character.codePointBefore(buffer, curPos);
+                        int cpLen = Character.charCount(cp);
+                        buffer.delete(curPos - cpLen, curPos);
+                        curPos -= cpLen;
+                        if (cp == ' ') {
                             break;
                         }
                     }
@@ -776,12 +783,12 @@ public class Less {
                     break;
                 case LEFT:
                     if (curPos > begPos) {
-                        curPos--;
+                        curPos -= Character.charCount(Character.codePointBefore(buffer, curPos));
                     }
                     break;
                 case RIGHT:
                     if (curPos < buffer.length()) {
-                        curPos++;
+                        curPos += Character.charCount(buffer.codePointAt(curPos));
                     }
                     break;
             }
@@ -1211,7 +1218,7 @@ public class Less {
                         lastLineToDisplay = nextLine.getU();
                         break;
                     }
-                    if (line.columnLength() > off + width) {
+                    if (line.columnLength(terminal) > off + width) {
                         off += width;
                     } else {
                         off = 0;
@@ -1225,7 +1232,7 @@ public class Less {
             }
             Pair<Integer, AttributedString> nextLine = nextLine2display(firstLineToDisplay, dpCompiled);
             AttributedString line = nextLine.getV();
-            if (doOffsets && line.columnLength() > width + offsetInLine) {
+            if (doOffsets && line.columnLength(terminal) > width + offsetInLine) {
                 offsetInLine += width;
             } else {
                 offsetInLine = 0;
@@ -1248,7 +1255,7 @@ public class Less {
                 firstLineToDisplay = prevLine.getU();
                 AttributedString line = prevLine.getV();
                 if (line != null && firstColumnToDisplay == 0 && !chopLongLines) {
-                    int length = line.columnLength();
+                    int length = line.columnLength(terminal);
                     offsetInLine = length - length % width;
                 }
             } else {
@@ -1360,14 +1367,14 @@ public class Less {
                 if (terminalLine == 0 && offsetInLine > 0) {
                     off = Math.max(offsetInLine, off);
                 }
-                toDisplay = curLine.columnSubSequence(off, off + width);
+                toDisplay = curLine.columnSubSequence(off, off + width, terminal);
                 curLine = null;
             } else {
                 if (terminalLine == 0 && offsetInLine > 0) {
-                    curLine = curLine.columnSubSequence(offsetInLine, Integer.MAX_VALUE);
+                    curLine = curLine.columnSubSequence(offsetInLine, Integer.MAX_VALUE, terminal);
                 }
-                toDisplay = curLine.columnSubSequence(0, width);
-                curLine = curLine.columnSubSequence(width, Integer.MAX_VALUE);
+                toDisplay = curLine.columnSubSequence(0, width, terminal);
+                curLine = curLine.columnSubSequence(width, Integer.MAX_VALUE, terminal);
                 if (curLine.length() == 0) {
                     curLine = null;
                 }

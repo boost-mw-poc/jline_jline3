@@ -79,7 +79,6 @@ public abstract class AbstractUnixSysTerminal extends AbstractTerminal {
     final Map<Signal, Object> nativeHandlers = new ConcurrentHashMap<>();
     private volatile Attributes cachedAttributes;
     private final Task closer;
-    private final boolean pollAvailable;
 
     @SuppressWarnings({"this-escape", "squid:S107"})
     protected AbstractUnixSysTerminal(
@@ -108,9 +107,6 @@ public abstract class AbstractUnixSysTerminal extends AbstractTerminal {
         IntUnaryOperator pollFn = createPollFunction();
         if (pollFn != null) {
             this.input.setPollFunction(pollFn);
-            this.pollAvailable = true;
-        } else {
-            this.pollAvailable = false;
         }
         cachedAttributes = new Attributes(originalAttributes);
         FileDescriptor outFd;
@@ -197,11 +193,6 @@ public abstract class AbstractUnixSysTerminal extends AbstractTerminal {
      */
     protected IntUnaryOperator createPollFunction() {
         return null;
-    }
-
-    @Override
-    protected boolean hasPollSupport() {
-        return pollAvailable;
     }
 
     @Override

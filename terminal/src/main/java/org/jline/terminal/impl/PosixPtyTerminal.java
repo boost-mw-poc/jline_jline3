@@ -67,7 +67,6 @@ public class PosixPtyTerminal extends AbstractPosixTerminal {
     private Thread inputPumpThread;
     private Thread outputPumpThread;
     private boolean paused = true;
-    private final boolean pollAvailable;
 
     public PosixPtyTerminal(String name, String type, Pty pty, InputStream in, OutputStream out, Charset encoding)
             throws IOException {
@@ -122,7 +121,6 @@ public class PosixPtyTerminal extends AbstractPosixTerminal {
         this.output = pty.getSlaveOutput();
         this.reader = NonBlocking.nonBlocking(name, input, inputEncoding());
         this.writer = new PrintWriter(new OutputStreamWriter(output, outputEncoding()));
-        this.pollAvailable = pty instanceof AbstractPty && ((AbstractPty) pty).createSlavePollFunction() != null;
         parseInfoCmp();
         if (!paused) {
             resume();
@@ -147,11 +145,6 @@ public class PosixPtyTerminal extends AbstractPosixTerminal {
     public PrintWriter writer() {
         checkClosed();
         return writer;
-    }
-
-    @Override
-    protected boolean hasPollSupport() {
-        return pollAvailable;
     }
 
     @Override

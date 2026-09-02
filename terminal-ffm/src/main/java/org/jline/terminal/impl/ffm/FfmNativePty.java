@@ -14,7 +14,6 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.util.function.IntUnaryOperator;
 
 import org.jline.terminal.Attributes;
 import org.jline.terminal.Size;
@@ -73,11 +72,6 @@ class FfmNativePty extends AbstractPty {
         if (slave > 0) {
             getSlaveInput().close();
         }
-    }
-
-    @Override
-    protected IntUnaryOperator createSlavePollFunction() {
-        return timeoutMs -> CLibrary.pollForInput(slave, timeoutMs);
     }
 
     public int getMaster() {
